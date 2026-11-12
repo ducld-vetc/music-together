@@ -1,23 +1,22 @@
-import { useState } from 'react';
-import { beginLogin, getClientId, redirectUri, setClientId } from './lib/auth';
+import { useEffect, useState } from 'react';
+import { beginLogin, redirectUri } from './lib/auth';
 import { Mark } from './icons';
 
 export function LoginScreen({ error }: { error: string }) {
-  const [clientId, setId] = useState(getClientId());
   const [copied, setCopied] = useState(false);
   const [message, setMessage] = useState(error);
-  const callbackUri = redirectUri();
+  const [callbackUri, setCallbackUri] = useState('');
   const wrongHost = window.location.hostname === 'localhost';
 
-  async function connect() {
-    setMessage('');
-    setClientId(clientId);
-    try {
-      await beginLogin();
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : 'Không mở được Spotify.');
-    }
-  }
+  useEffect(() => {
+    setMessage(error);
+  }, [error]);
+
+  useEffect(() => {
+    redirectUri().then(setCallbackUri).catch((err: unknown) => {
+      setMessage(err instanceof Error ? err.message : 'Máy chủ proxy chưa chạy.');
+    });
+  }, []);
 
   async function copyUri() {
     try {
@@ -46,8 +45,8 @@ export function LoginScreen({ error }: { error: string }) {
             </a>
             .
           </li>
+          <li>Đặt Client ID và Client Secret trong file server/.env trên máy chủ. Trình duyệt không nhận secret.</li>
           <li>Trong Settings của app, thêm đúng Redirect URI bên dưới rồi bấm Save.</li>
-          <li>Dán Client ID vào ô này. Không cần Client Secret.</li>
           <li>Đăng nhập bằng tài khoản đã tạo app. Chỉ gói Premium nghe được trong trình duyệt.</li>
         </ol>
         {wrongHost && (
@@ -56,23 +55,13 @@ export function LoginScreen({ error }: { error: string }) {
           </p>
         )}
         <div className="uri">
-          <code>{callbackUri}</code>
-          <button type="button" className="ghost" onClick={() => void copyUri()}>
+          <code>{callbackUri || 'Đang đọc Redirect URI từ máy chủ…'}</code>
+          <button type="button" className="ghost" onClick={() => void copyUri()} disabled={!callbackUri}>
             {copied ? 'Đã chép' : 'Chép'}
           </button>
         </div>
-        <label className="field">
-          Client ID
-          <input
-            value={clientId}
-            autoComplete="off"
-            spellCheck={false}
-            placeholder="32 ký tự từ Dashboard"
-            onChange={(event) => setId(event.target.value)}
-          />
-        </label>
         {message && <p className="error">{message}</p>}
-        <button className="primary" type="button" disabled={clientId.trim().length < 10 || wrongHost} onClick={() => void connect()}>
+        <button className="primary" type="button" disabled={!callbackUri || wrongHost} onClick={beginLogin}>
           Kết nối Spotify
         </button>
         <p className="fine">

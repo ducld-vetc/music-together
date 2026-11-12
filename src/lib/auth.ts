@@ -1,29 +1,4 @@
-const CLIENT_KEY = 'nghe.clientId';
-const TOKEN_KEY = 'nghe.tokens';
-const VERIFIER_KEY = 'nghe.verifier';
-const STATE_KEY = 'nghe.state';
-
-export function redirectUri(): string {
-  if (window.location.hostname === 'localhost') return 'http://127.0.0.1:5173/callback';
-  const base = import.meta.env.BASE_URL.replace(/\/$/, '');
-  return `${window.location.origin}${base}/callback`;
-}
-
-const SCOPES = [
-  'streaming',
-  'user-read-email',
-  'user-read-private',
-  'user-read-playback-state',
-  'user-modify-playback-state',
-  'user-read-currently-playing',
-  'playlist-read-private',
-  'playlist-read-collaborative',
-  'user-library-read',
-  'user-library-modify',
-  'user-top-read',
-  'user-read-recently-played',
-  'user-follow-read',
-].join(' ');
+const STORAGE_KEY = 'nghe.session';
 
 type Tokens = {
   access_token: string;
@@ -31,164 +6,145 @@ type Tokens = {
   expires_at: number;
 };
 
-export function getClientId(): string {
-  return localStorage.getItem(CLIENT_KEY) ?? '';
+export function apiBase(): string {
+  return (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '');
 }
 
-export function setClientId(id: string): void {
-  localStorage.setItem(CLIENT_KEY, id.trim());
+function gateway(path: string): string {
+  return `${apiBase()}${path}`;
 }
 
-export function getTokens(): Tokens | null {
-  const raw = localStorage.getItem(TOKEN_KEY);
+function readTokens(): Tokens | null {
+  const raw = sessionStorage.getItem(STORAGE_KEY);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as Tokens;
+    const data = JSON.parse(raw) as Tokens;
+    if (!data.access_token || !data.refresh_token || !data.expires_at) return null;
+    return data;
   } catch {
     return null;
   }
 }
 
-function saveTokens(tokens: Tokens): void {
-  localStorage.setItem(TOKEN_KEY, JSON.stringify(tokens));
+function writeTokens(tokens: Tokens): void {
+  sessionStorage.setItem(STORAGE_KEY, JSON.stringify(tokens));
 }
 
-export function clearSession(): void {
-  localStorage.removeItem(TOKEN_KEY);
-  sessionStorage.removeItem(VERIFIER_KEY);
-  sessionStorage.removeItem(STATE_KEY);
+function decodeSession(value: string): Tokens | null {
+  try {
+    const json = atob(value.replace(/-/g, '+').replace(/_/g, '/'));
+    const data = JSON.parse(json) as Tokens;
+    if (!data.access_token || !data.refresh_token || !data.expires_at) return null;
+    return data;
+  } catch {
+    return null;
+  }
 }
 
-function randomString(length: number): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  const bytes = crypto.getRandomValues(new Uint8Array(length));
-  return Array.from(bytes, (byte) => chars[byte % chars.length]).join('');
-}
-
-async function codeChallenge(verifier: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
-  return btoa(String.fromCharCode(...new Uint8Array(digest)))
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/g, '');
-}
-
-export async function beginLogin(): Promise<void> {
-  const clientId = getClientId();
-  if (!clientId) throw new Error('Hãy dán Client ID trước.');
-  const verifier = randomString(64);
-  const state = randomString(16);
-  sessionStorage.setItem(VERIFIER_KEY, verifier);
-  sessionStorage.setItem(STATE_KEY, state);
-  const params = new URLSearchParams({
-    response_type: 'code',
-    client_id: clientId,
-    scope: SCOPES,
-    redirect_uri: redirectUri(),
-    state,
-    code_challenge_method: 'S256',
-    code_challenge: await codeChallenge(verifier),
-  });
-  window.location.assign(`https://accounts.spotify.com/authorize?${params}`);
-}
-
-export async function finishLoginFromUrl(): Promise<boolean> {
+export function consumeAuthRedirect(): string | null {
   const url = new URL(window.location.href);
-  const code = url.searchParams.get('code');
-  const error = url.searchParams.get('error');
-  if (!code && !error) return false;
-  const state = url.searchParams.get('state');
-  const expected = sessionStorage.getItem(STATE_KEY);
-  const verifier = sessionStorage.getItem(VERIFIER_KEY);
-  window.history.replaceState({}, '', '/');
-  if (error) {
-    throw new Error(error === 'access_denied' ? 'Bạn đã từ chối quyền truy cập Spotify.' : error);
+  const error = url.searchParams.get('auth_error');
+  const session = new URLSearchParams(url.hash.replace(/^#/, '')).get('session');
+  if (session) {
+    const tokens = decodeSession(session);
+    if (tokens) writeTokens(tokens);
   }
-  if (!verifier || !state || state !== expected) {
-    throw new Error('Phiên đăng nhập không khớp. Hãy bấm kết nối lại.');
+  if (error || session) {
+    url.searchParams.delete('auth_error');
+    url.hash = '';
+    window.history.replaceState({}, '', `${url.pathname}${url.search}`);
   }
-  const body = new URLSearchParams({
-    grant_type: 'authorization_code',
-    code: code ?? '',
-    redirect_uri: redirectUri(),
-    client_id: getClientId(),
-    code_verifier: verifier,
-  });
-  const response = await fetch('https://accounts.spotify.com/api/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body,
-  });
-  const data = (await response.json()) as {
-    access_token?: string;
-    refresh_token?: string;
-    expires_in?: number;
-    error_description?: string;
-  };
-  if (!response.ok || !data.access_token || !data.refresh_token || !data.expires_in) {
-    throw new Error(data.error_description || 'Đăng nhập Spotify thất bại.');
-  }
-  saveTokens({
-    access_token: data.access_token,
-    refresh_token: data.refresh_token,
-    expires_at: Date.now() + data.expires_in * 1000,
-  });
-  sessionStorage.removeItem(VERIFIER_KEY);
-  sessionStorage.removeItem(STATE_KEY);
-  return true;
+  if (!error) return null;
+  sessionStorage.removeItem(STORAGE_KEY);
+  if (error === 'access_denied') return 'Bạn đã từ chối quyền truy cập Spotify.';
+  if (error === 'state') return 'Phiên đăng nhập không khớp. Hãy bấm kết nối lại.';
+  return error;
+}
+
+export async function hasSession(): Promise<boolean> {
+  if (readTokens()) return true;
+  const response = await fetch(gateway('/auth/session'), { credentials: 'include' });
+  if (!response.ok) return false;
+  const data = (await response.json()) as { authenticated?: boolean };
+  return Boolean(data.authenticated);
+}
+
+export async function redirectUri(): Promise<string> {
+  const response = await fetch(gateway('/auth/config'), { credentials: 'include' });
+  const data = (await response.json().catch(() => null)) as { redirectUri?: string; error?: { message?: string } } | null;
+  if (!response.ok) throw new Error(data?.error?.message || 'Máy chủ proxy chưa chạy.');
+  if (!data?.redirectUri) throw new Error('Máy chủ chưa có Redirect URI.');
+  return data.redirectUri;
+}
+
+export function beginLogin(): void {
+  window.location.assign(gateway('/auth/login'));
 }
 
 let refreshing: Promise<string> | null = null;
 
 async function refresh(tokens: Tokens): Promise<string> {
-  const body = new URLSearchParams({
-    grant_type: 'refresh_token',
-    refresh_token: tokens.refresh_token,
-    client_id: getClientId(),
-  });
-  const response = await fetch('https://accounts.spotify.com/api/token', {
+  const response = await fetch(gateway('/auth/refresh'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body,
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', 'X-Nghe-Request': '1' },
+    body: JSON.stringify({ refresh_token: tokens.refresh_token }),
   });
-  const data = (await response.json()) as {
+  const data = (await response.json().catch(() => null)) as {
     access_token?: string;
     refresh_token?: string;
     expires_in?: number;
-    error_description?: string;
-  };
-  if (!response.ok || !data.access_token || !data.expires_in) {
-    clearSession();
+    error?: { message?: string };
+  } | null;
+  if (!response.ok || !data?.access_token || !data.expires_in) {
+    sessionStorage.removeItem(STORAGE_KEY);
     window.dispatchEvent(new Event('nghe:logout'));
-    throw new Error(data.error_description || 'Phiên hết hạn');
+    throw new Error(data?.error?.message || 'Phiên hết hạn');
   }
   const next: Tokens = {
     access_token: data.access_token,
     refresh_token: data.refresh_token || tokens.refresh_token,
     expires_at: Date.now() + data.expires_in * 1000,
   };
-  saveTokens(next);
+  writeTokens(next);
   return next.access_token;
 }
 
 export function ensureAccessToken(): Promise<string> {
-  const tokens = getTokens();
+  const tokens = readTokens();
   if (!tokens) {
-    window.dispatchEvent(new Event('nghe:logout'));
-    return Promise.reject(new Error('Chưa đăng nhập'));
+    return fetch(gateway('/auth/token'), { credentials: 'include' }).then(async (response) => {
+      const data = (await response.json().catch(() => null)) as { access_token?: string; error?: { message?: string } } | null;
+      if (!response.ok || !data?.access_token) {
+        window.dispatchEvent(new Event('nghe:logout'));
+        throw new Error(data?.error?.message || 'Chưa đăng nhập');
+      }
+      return data.access_token;
+    });
   }
   if (Date.now() < tokens.expires_at - 30_000) return Promise.resolve(tokens.access_token);
-  if (!refreshing) refreshing = refresh(tokens).finally(() => {
+  if (!refreshing) {
+    refreshing = refresh(tokens).finally(() => {
+      refreshing = null;
+    });
+  }
+  return refreshing;
+}
+
+export function forceRefresh(): Promise<string> {
+  const tokens = readTokens();
+  if (!tokens) return ensureAccessToken();
+  refreshing = refresh(tokens).finally(() => {
     refreshing = null;
   });
   return refreshing;
 }
 
-export function forceRefresh(): Promise<string> {
-  const tokens = getTokens();
-  if (!tokens) throw new Error('Chưa đăng nhập');
-  refreshing = refresh(tokens).finally(() => {
-    refreshing = null;
+export function clearSession(): void {
+  sessionStorage.removeItem(STORAGE_KEY);
+  void fetch(gateway('/auth/logout'), {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'X-Nghe-Request': '1' },
   });
-  return refreshing;
 }
