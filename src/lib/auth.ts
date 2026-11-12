@@ -1,4 +1,6 @@
+const CLIENT_KEY = 'nghe.clientId';
 const STORAGE_KEY = 'nghe.session';
+const CLIENT_ID_RE = /^[0-9a-fA-F]{32}$/;
 
 type Tokens = {
   access_token: string;
@@ -12,6 +14,27 @@ export function apiBase(): string {
 
 function gateway(path: string): string {
   return `${apiBase()}${path}`;
+}
+
+export function getClientId(): string {
+  return localStorage.getItem(CLIENT_KEY) ?? '';
+}
+
+export function setClientId(id: string): void {
+  const trimmed = id.trim();
+  if (!trimmed) {
+    localStorage.removeItem(CLIENT_KEY);
+    return;
+  }
+  localStorage.setItem(CLIENT_KEY, trimmed);
+}
+
+function clientIdOrThrow(): string {
+  const id = getClientId().trim();
+  if (!CLIENT_ID_RE.test(id)) {
+    throw new Error('Hãy dán Client ID của app Spotify của bạn rồi đăng nhập lại.');
+  }
+  return id;
 }
 
 function readTokens(): Tokens | null {
@@ -77,18 +100,29 @@ export async function redirectUri(): Promise<string> {
   return data.redirectUri;
 }
 
-export function beginLogin(): void {
-  window.location.assign(gateway('/auth/login'));
+export function beginLogin(clientId: string): void {
+  const id = clientId.trim();
+  if (!CLIENT_ID_RE.test(id)) throw new Error('Hãy dán Client ID của app Spotify của bạn.');
+  setClientId(id);
+  window.location.assign(`${gateway('/auth/login')}?client_id=${encodeURIComponent(id)}`);
 }
 
 let refreshing: Promise<string> | null = null;
 
 async function refresh(tokens: Tokens): Promise<string> {
+  let clientId = '';
+  try {
+    clientId = clientIdOrThrow();
+  } catch (error) {
+    sessionStorage.removeItem(STORAGE_KEY);
+    window.dispatchEvent(new Event('nghe:logout'));
+    throw error;
+  }
   const response = await fetch(gateway('/auth/refresh'), {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json', 'X-Nghe-Request': '1' },
-    body: JSON.stringify({ refresh_token: tokens.refresh_token }),
+    body: JSON.stringify({ refresh_token: tokens.refresh_token, client_id: clientId }),
   });
   const data = (await response.json().catch(() => null)) as {
     access_token?: string;
@@ -113,7 +147,9 @@ async function refresh(tokens: Tokens): Promise<string> {
 export function ensureAccessToken(): Promise<string> {
   const tokens = readTokens();
   if (!tokens) {
-    return fetch(gateway('/auth/token'), { credentials: 'include' }).then(async (response) => {
+    const clientId = getClientId().trim();
+    const query = CLIENT_ID_RE.test(clientId) ? `?client_id=${encodeURIComponent(clientId)}` : '';
+    return fetch(gateway(`/auth/token${query}`), { credentials: 'include' }).then(async (response) => {
       const data = (await response.json().catch(() => null)) as { access_token?: string; error?: { message?: string } } | null;
       if (!response.ok || !data?.access_token) {
         window.dispatchEvent(new Event('nghe:logout'));

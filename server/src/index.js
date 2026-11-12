@@ -1,4 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { existsSync, readdirSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -57,8 +60,24 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser(SESSION_SECRET || 'unset'));
+const here = path.dirname(fileURLToPath(import.meta.url));
+const clientDir = [
+  path.join(process.cwd(), 'public'),
+  path.join(process.cwd(), 'src/public'),
+  path.join(here, 'public'),
+  path.join(here, '../public'),
+  path.join(here, 'src/public'),
+].find((dir) => existsSync(path.join(dir, 'index.html')));
+
+function isPage(req) {
+  return (req.method === 'GET' || req.method === 'HEAD')
+    && !req.path.startsWith('/auth')
+    && !req.path.startsWith('/spotify')
+    && req.path !== '/health';
+}
+
 app.use((req, res, next) => {
-  if (!missing.length || req.path === '/health') {
+  if (!missing.length || req.path === '/health' || isPage(req)) {
     next();
     return;
   }
@@ -405,6 +424,29 @@ app.use('/spotify', asyncRoute(async (req, res) => {
   const token = await accessToken(req, res, req.query.client_id);
   await forward(req, res, token);
 }));
+
+if (clientDir) {
+  app.use(express.static(clientDir, { index: false }));
+  app.use((req, res, next) => {
+    if (!isPage(req)) {
+      next();
+      return;
+    }
+    res.sendFile(path.join(clientDir, 'index.html'), (error) => error && next());
+  });
+} else {
+  app.get('/', (_req, res) => {
+    const dirs = [process.cwd(), here, path.join(here, '..'), '/var/task'];
+    const listing = dirs.map((dir) => {
+      try {
+        return `${dir}: ${readdirSync(dir).join(', ')}`;
+      } catch (error) {
+        return `${dir}: ${error instanceof Error ? error.message : 'unreadable'}`;
+      }
+    });
+    res.type('text/plain').send(listing.join('\n'));
+  });
+}
 
 app.use((err, _req, res, _next) => {
   const status = err.status || 500;

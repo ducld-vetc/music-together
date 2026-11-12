@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
-    "vercel-build": "npm ci --prefix .. && npm --prefix .. run build && rm -rf public && cp -R ../dist public"
+    "vercel-build": "npm ci --prefix .. && npm --prefix .. run build && rm -rf public src/public && mkdir -p src/public && cp -R ../dist/. public && cp -R ../dist/. src/public"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",

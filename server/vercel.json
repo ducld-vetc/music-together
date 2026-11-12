@@ -1,7 +1,7 @@
 {
   "functions": {
     "src/index.js": {
-      "includeFiles": "public/**"
+      "includeFiles": "{public,src/public}/**"
     }
   }
 }
