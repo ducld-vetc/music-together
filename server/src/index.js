@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import cookieParser from 'cookie-parser';
@@ -433,18 +433,6 @@ if (clientDir) {
       return;
     }
     res.sendFile(path.join(clientDir, 'index.html'), (error) => error && next());
-  });
-} else {
-  app.get('/', (_req, res) => {
-    const dirs = [process.cwd(), here, path.join(here, '..'), '/var/task'];
-    const listing = dirs.map((dir) => {
-      try {
-        return `${dir}: ${readdirSync(dir).join(', ')}`;
-      } catch (error) {
-        return `${dir}: ${error instanceof Error ? error.message : 'unreadable'}`;
-      }
-    });
-    res.type('text/plain').send(listing.join('\n'));
   });
 }
 
